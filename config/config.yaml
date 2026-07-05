@@ -1,0 +1,51 @@
+# ============================================================================
+# Cross-exchange arbitrage system — single source of configuration.
+#
+# Phase 1 runs in OBSERVE mode only: it maintains order books, detects
+# theoretical opportunities net of fees and depth-implied slippage, and logs
+# them. There is no order-placement code in this build.
+# ============================================================================
+
+symbols:
+  - BTC/USDT
+  - ETH/USDT
+
+signals:
+  # An opportunity only "opens" when the net-of-everything edge exceeds this.
+  min_net_edge_bps: 3.0
+  # Clip sizes (quote notional) the detector prices via depth-walk VWAP.
+  # Slippage is implicit: the executable VWAP for the clip, not top-of-book.
+  clip_sizes_usdt: [1000, 5000, 25000]
+
+risk:
+  # A venue's book older than this is unusable; no signal may reference it.
+  # This same limit becomes a kill-switch trigger in Phase 2.
+  staleness_ms: 500
+  # Validated now, ENFORCED from Phase 2 (no positions exist in Phase 1).
+  max_position_usdt: 5000
+  max_daily_loss_usdt: 200
+
+# Fee tiers in basis points. THESE ARE STANDARD RETAIL (VIP0, no BNB/token
+# discounts) — SET THEM TO YOUR ACTUAL TIER before trusting net-spread data,
+# since the whole point of Phase 1 is measuring edge at YOUR fees.
+venues:
+  binance:
+    enabled: true
+    fees: { maker_bps: 10.0, taker_bps: 10.0 }
+  bybit:
+    enabled: true
+    fees: { maker_bps: 10.0, taker_bps: 10.0 }
+  okx:
+    enabled: true
+    fees: { maker_bps: 8.0, taker_bps: 10.0 }
+  bitget:
+    enabled: true
+    fees: { maker_bps: 10.0, taker_bps: 10.0 }
+
+monitoring:
+  metrics_port: 9109          # Prometheus scrape endpoint (/metrics)
+  dashboard: true             # rich terminal dashboard (auto-off if not a TTY)
+  spread_sample_interval_s: 30.0  # periodic net-spread samples written to JSONL
+  log_dir: logs
+
+data_dir: data                # JSONL opportunity/sample records land here
