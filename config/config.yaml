@@ -48,4 +48,17 @@ monitoring:
   spread_sample_interval_s: 30.0  # periodic net-spread samples written to JSONL
   log_dir: logs
 
+# Deterministic market-data journal: every applied book event, replayable with
+# `python -m arb replay`. Disk cost is real (every delta, every venue/symbol);
+# disable deliberately if you don't need replay data.
+recording:
+  enabled: true
+  dir: data/recordings
+
+# Per-venue tick/step/minimum metadata used to round clip quantities to venue
+# rules. The checked-in file is a STATIC UNVERIFIED snapshot — refresh it with
+# `python -m arb instruments fetch` from a machine with exchange access.
+# Set to null to disable rounding explicitly.
+instruments_file: config/instruments.yaml
+
 data_dir: data                # JSONL opportunity/sample records land here

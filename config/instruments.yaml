@@ -1,0 +1,98 @@
+# ============================================================================
+# Instrument precision/minimum metadata (canonical registry, CLAUDE.md §10).
+#
+# *** STATIC SNAPSHOT — UNVERIFIED AGAINST LIVE ENDPOINTS ***
+# These values were written from public exchange documentation as of
+# 2026-07-11 in a sandbox that cannot reach exchange endpoints. Exchanges
+# change filters without notice. Before trusting research output, refresh
+# from an operator machine:
+#
+#     python -m arb instruments fetch --config config/config.yaml
+#
+# Values chosen conservatively where sources disagreed: a too-HIGH
+# min_notional rejects small clips (safe); a too-COARSE qty_step rounds
+# quantities down further (safe). The reverse errors would not be safe.
+# ============================================================================
+schema_version: 1
+generated_at: "2026-07-11T00:00:00+00:00"
+instruments:
+  - venue: binance
+    symbol: BTC/USDT
+    exchange_symbol: BTCUSDT
+    status: trading
+    price_tick: "0.01"
+    qty_step: "0.00001"
+    min_qty: "0.00001"
+    min_notional: "5"
+    source: "static: docs snapshot 2026-07-11, UNVERIFIED — refresh with `arb instruments fetch`"
+    fetched_at: null
+  - venue: binance
+    symbol: ETH/USDT
+    exchange_symbol: ETHUSDT
+    status: trading
+    price_tick: "0.01"
+    qty_step: "0.0001"
+    min_qty: "0.0001"
+    min_notional: "5"
+    source: "static: docs snapshot 2026-07-11, UNVERIFIED — refresh with `arb instruments fetch`"
+    fetched_at: null
+  - venue: bybit
+    symbol: BTC/USDT
+    exchange_symbol: BTCUSDT
+    status: trading
+    price_tick: "0.01"
+    qty_step: "0.000001"
+    min_qty: "0.000048"
+    min_notional: "5"
+    source: "static: docs snapshot 2026-07-11, UNVERIFIED — refresh with `arb instruments fetch`"
+    fetched_at: null
+  - venue: bybit
+    symbol: ETH/USDT
+    exchange_symbol: ETHUSDT
+    status: trading
+    price_tick: "0.01"
+    qty_step: "0.00001"
+    min_qty: "0.0005"
+    min_notional: "5"
+    source: "static: docs snapshot 2026-07-11, UNVERIFIED — refresh with `arb instruments fetch`"
+    fetched_at: null
+  - venue: okx
+    symbol: BTC/USDT
+    exchange_symbol: BTC-USDT
+    status: trading
+    price_tick: "0.1"
+    qty_step: "0.00000001"
+    min_qty: "0.00001"
+    min_notional: "0"
+    source: "static: docs snapshot 2026-07-11, UNVERIFIED — refresh with `arb instruments fetch`"
+    fetched_at: null
+  - venue: okx
+    symbol: ETH/USDT
+    exchange_symbol: ETH-USDT
+    status: trading
+    price_tick: "0.01"
+    qty_step: "0.000001"
+    min_qty: "0.001"
+    min_notional: "0"
+    source: "static: docs snapshot 2026-07-11, UNVERIFIED — refresh with `arb instruments fetch`"
+    fetched_at: null
+  - venue: bitget
+    symbol: BTC/USDT
+    exchange_symbol: BTCUSDT
+    status: trading
+    price_tick: "0.01"
+    qty_step: "0.000001"
+    min_qty: "0.00001"
+    min_notional: "5"
+    source: "static: docs snapshot 2026-07-11, UNVERIFIED — refresh with `arb instruments fetch`"
+    fetched_at: null
+  - venue: bitget
+    symbol: ETH/USDT
+    exchange_symbol: ETHUSDT
+    status: trading
+    price_tick: "0.01"
+    qty_step: "0.0001"
+    min_qty: "0.0001"
+    min_notional: "5"
+    source: "static: docs snapshot 2026-07-11, UNVERIFIED — refresh with `arb instruments fetch`"
+    fetched_at: null

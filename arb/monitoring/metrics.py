@@ -103,6 +103,19 @@ class Metrics:
             "arb_record_write_errors_total", "Research record write failures", registry=r
         )
 
+        # recording (deterministic market-data journal)
+        self.recording_events = Counter(
+            "arb_recording_events_total",
+            "Book events journaled for replay",
+            ["venue"],
+            registry=r,
+        )
+        self.recording_errors = Counter(
+            "arb_recording_errors_total",
+            "Book-event journal write failures",
+            registry=r,
+        )
+
     def start_server(self, port: int) -> None:
         """Expose /metrics. Runs in prometheus_client's own daemon thread;
         the scrape path never touches the event loop."""

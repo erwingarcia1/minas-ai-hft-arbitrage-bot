@@ -32,7 +32,7 @@ from arb.monitoring.metrics import Metrics
 
 logger = logging.getLogger("arb.risk.staleness")
 
-_TICK_S = 0.1
+TICK_S = 0.1  # shared with the replay engine's monitor grid
 
 
 class StalenessMonitor:
@@ -61,40 +61,45 @@ class StalenessMonitor:
         books = self.registry.books_for_venue(venue)
         return all(b.synced and b.age_ms(now_mono_ns) <= self.staleness_ms for b in books)
 
+    def tick(self, now_mono_ns: int) -> None:
+        """One monitor pass at ``now_mono_ns``. Pure with respect to time so
+        the replay engine can run the SAME transition logic on a
+        deterministic 100ms grid instead of re-implementing it."""
+        for venue in self.venues:
+            for book in self.registry.books_for_venue(venue):
+                age = book.age_ms(now_mono_ns)
+                self.metrics.book_age_ms.labels(
+                    venue=venue.value, symbol=book.symbol
+                ).set(age if age != float("inf") else -1.0)
+                fresh = book.synced and age <= self.staleness_ms
+                key = (venue, book.symbol)
+                if self._book_fresh.get(key, False) and not fresh:
+                    # Per-book backstop: re-evaluating the symbol closes
+                    # any opportunity leaning on this now-stale book.
+                    if self.on_symbol_degraded is not None:
+                        self.on_symbol_degraded(book.symbol)
+                self._book_fresh[key] = fresh
+            usable_now = self.venue_usable(venue, now_mono_ns)
+            self.metrics.venue_usable.labels(venue=venue.value).set(
+                1.0 if usable_now else 0.0
+            )
+            if self.usable[venue] and not usable_now:
+                logger.warning(
+                    "venue %s became UNUSABLE (stale or unsynced books)",
+                    venue.value,
+                    extra={"venue": venue.value},
+                )
+                self.on_unusable(venue, "venue_unusable")
+            elif not self.usable[venue] and usable_now:
+                logger.info(
+                    "venue %s became usable", venue.value, extra={"venue": venue.value}
+                )
+            self.usable[venue] = usable_now
+
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
-            now_mono_ns = time.monotonic_ns()
-            for venue in self.venues:
-                for book in self.registry.books_for_venue(venue):
-                    age = book.age_ms(now_mono_ns)
-                    self.metrics.book_age_ms.labels(
-                        venue=venue.value, symbol=book.symbol
-                    ).set(age if age != float("inf") else -1.0)
-                    fresh = book.synced and age <= self.staleness_ms
-                    key = (venue, book.symbol)
-                    if self._book_fresh.get(key, False) and not fresh:
-                        # Per-book backstop: re-evaluating the symbol closes
-                        # any opportunity leaning on this now-stale book.
-                        if self.on_symbol_degraded is not None:
-                            self.on_symbol_degraded(book.symbol)
-                    self._book_fresh[key] = fresh
-                usable_now = self.venue_usable(venue, now_mono_ns)
-                self.metrics.venue_usable.labels(venue=venue.value).set(
-                    1.0 if usable_now else 0.0
-                )
-                if self.usable[venue] and not usable_now:
-                    logger.warning(
-                        "venue %s became UNUSABLE (stale or unsynced books)",
-                        venue.value,
-                        extra={"venue": venue.value},
-                    )
-                    self.on_unusable(venue, "venue_unusable")
-                elif not self.usable[venue] and usable_now:
-                    logger.info(
-                        "venue %s became usable", venue.value, extra={"venue": venue.value}
-                    )
-                self.usable[venue] = usable_now
+            self.tick(time.monotonic_ns())
             try:
-                await asyncio.wait_for(stop.wait(), timeout=_TICK_S)
+                await asyncio.wait_for(stop.wait(), timeout=TICK_S)
             except TimeoutError:
                 pass

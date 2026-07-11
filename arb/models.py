@@ -81,6 +81,16 @@ class MonitoringSettings(StrictModel):
     log_dir: Path = Path("logs")
 
 
+class RecordingSettings(StrictModel):
+    """Deterministic market-data journal (arb/recording). The replay engine
+    consumes these files; without them Mode 2 has nothing to replay. Disk
+    cost is real (every book delta for every venue/symbol) — budget for it
+    or disable deliberately."""
+
+    enabled: bool = False
+    dir: Path = Path("data/recordings")
+
+
 class Settings(StrictModel):
     """Root configuration. Loaded from a single YAML file — see config/loader."""
 
@@ -89,6 +99,11 @@ class Settings(StrictModel):
     signals: SignalSettings
     risk: RiskSettings
     monitoring: MonitoringSettings
+    recording: RecordingSettings = Field(default_factory=RecordingSettings)
+    # Per-venue precision/minimum metadata (tick, step, min qty/notional) used
+    # to round clip quantities to exchange rules. None disables rounding
+    # EXPLICITLY (the detector then prices unrounded quantities and says so).
+    instruments_file: Path | None = Path("config/instruments.yaml")
     data_dir: Path = Path("data")
 
     @field_validator("symbols")

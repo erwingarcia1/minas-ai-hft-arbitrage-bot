@@ -51,7 +51,12 @@ def test_opportunity_opens_and_closes_on_edge_decay() -> None:
     assert rec["gross_bps_open"] == pytest.approx(50.0, abs=0.1)
     assert rec["max_net_bps"] >= rec["net_bps_open"] - 1e-9
     assert rec["duration_ms"] >= 0
-    assert rec["est_profit_usdt_open"] == pytest.approx(1000 * rec["net_bps_open"] / 1e4)
+    # Profit on the EXECUTABLE notional: qty at open VWAPs, fees explicit.
+    fee = 10.0 / 1e4
+    assert rec["est_profit_usdt_open"] == pytest.approx(
+        rec["qty_base"]
+        * (rec["sell_vwap_open"] * (1 - fee) - rec["buy_vwap_open"] * (1 + fee))
+    )
 
 
 def test_no_opportunity_below_threshold() -> None:

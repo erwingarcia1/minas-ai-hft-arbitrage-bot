@@ -119,8 +119,6 @@ class BybitFeed(WsFeed):
                 data.b, data.a, exchange_ts_ms=exchange_ts, mono_ns=mono_ns, wall_ns=wall_ns
             )
             self._last_u[symbol] = data.u
-            book.synced = True
-            self.clear_resync_deadline(symbol)
         else:
             last_u = self._last_u.get(symbol)
             if last_u is None:
@@ -138,11 +136,16 @@ class BybitFeed(WsFeed):
             )
             self._last_u[symbol] = data.u
 
+        # Integrity is verified BEFORE the book is marked synced: a locally-
+        # crossed book must never be journaled as trusted.
         if book.crossed():
             self.note_resync(symbol, "crossed_book")
             await self._resubscribe(symbol)
             return
 
+        if is_snapshot:
+            book.synced = True
+            self.clear_resync_deadline(symbol)
         self.record_feed_latency(exchange_ts, wall_ns)
         self.on_update(self.venue, symbol)
 

@@ -13,10 +13,12 @@ def make_settings(
     min_net_edge_bps: float = 3.0,
     clip_sizes_usdt: list[float] | None = None,
     staleness_ms: int = 500,
+    spread_sample_interval_s: float = 30.0,
+    symbols: list[str] | None = None,
 ) -> Settings:
     return Settings.model_validate(
         {
-            "symbols": ["BTC/USDT"],
+            "symbols": symbols or ["BTC/USDT"],
             "signals": {
                 "min_net_edge_bps": min_net_edge_bps,
                 "clip_sizes_usdt": clip_sizes_usdt or [1000],
@@ -35,8 +37,11 @@ def make_settings(
             "monitoring": {
                 "metrics_port": 9109,
                 "dashboard": False,
-                "spread_sample_interval_s": 30,
+                "spread_sample_interval_s": spread_sample_interval_s,
             },
+            # Tests opt into recording/instruments explicitly; the model
+            # defaults (recording disabled) keep unit tests hermetic.
+            "instruments_file": None,
             "data_dir": "data",
         }
     )

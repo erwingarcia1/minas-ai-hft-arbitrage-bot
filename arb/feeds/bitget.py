@@ -117,8 +117,6 @@ class BitgetFeed(WsFeed):
                 data.bids, data.asks, exchange_ts_ms=exchange_ts, mono_ns=mono_ns, wall_ns=wall_ns
             )
             self._have_snapshot.add(symbol)
-            book.synced = True
-            self.clear_resync_deadline(symbol)
         else:
             if symbol not in self._have_snapshot:
                 return  # update before snapshot (resubscribe race): wait
@@ -126,6 +124,8 @@ class BitgetFeed(WsFeed):
                 data.bids, data.asks, exchange_ts_ms=exchange_ts, mono_ns=mono_ns, wall_ns=wall_ns
             )
 
+        # Integrity is verified BEFORE the book is marked synced: state that
+        # has not passed its checksum must never be journaled as trusted.
         if data.checksum is not None and book.checksum() != data.checksum:
             await self._resync(symbol, "checksum_mismatch")
             return
@@ -134,6 +134,9 @@ class BitgetFeed(WsFeed):
             await self._resync(symbol, "crossed_book")
             return
 
+        if action == "snapshot":
+            book.synced = True
+            self.clear_resync_deadline(symbol)
         if action == "update":
             # Only a clean UPDATE ends a resync streak (the snapshot after a
             # resubscribe also applies cleanly; see the storm guard below).

@@ -8,6 +8,13 @@ faithfully where ``float`` formatting would not.
 Signal math reads float views (``iter_bids``/``iter_asks``/``vwap_for_qty``);
 float64 precision is far beyond bps-level spread math.
 
+Recording tap: every state change flows through ``apply_snapshot`` /
+``apply_deltas`` / ``clear`` / the ``synced`` property, and each fires the
+optional ``tap`` callback with the literal levels and all three timestamps.
+The deterministic market-data journal (arb/recording) and therefore the
+replay engine (arb/replay) are built on this seam — replay re-applies tap
+events instead of re-running venue protocols.
+
 Failure modes:
 - A book is only trustworthy when ``synced`` is True AND ``age_ms()`` is small;
   consumers must check both. ``synced`` is cleared by the owning feed on
@@ -17,21 +24,40 @@ Failure modes:
   top-of-book.
 - Exchanges send plain decimal strings; scientific notation would break
   checksum reconstruction and is asserted against in tests.
+- A raising ``tap`` is contained and logged: recording failures must degrade
+  recording, never market-data processing.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 import zlib
 from decimal import Decimal
 from itertools import islice
-from typing import Iterable, Iterator, Literal
+from typing import Callable, Iterable, Iterator, Literal
 
 from sortedcontainers import SortedDict
 
 from arb.models import VenueName
 
+logger = logging.getLogger("arb.feeds.book")
+
 RawLevel = tuple[str, str]  # (price, size) exactly as received
+
+# Tap event kinds, emitted in application order:
+#   "snapshot"  levels replaced wholesale (book was cleared first)
+#   "delta"     incremental level changes applied
+#   "clear"     levels dropped (disconnect/resync); an "unsync" follows if the
+#               book was synced
+#   "sync"      synced False -> True
+#   "unsync"    synced True -> False
+BookEventKind = Literal["snapshot", "delta", "clear", "sync", "unsync"]
+# tap(book, kind, bids, asks, exchange_ts_ms, mono_ns, wall_ns)
+BookTap = Callable[
+    ["OrderBook", BookEventKind, list[RawLevel], list[RawLevel], "int | None", int, int],
+    None,
+]
 
 _CHECKSUM_DEPTH = 25  # OKX and Bitget both checksum the top 25 levels
 
@@ -62,10 +88,11 @@ class OrderBook:
         "symbol",
         "bids",
         "asks",
-        "synced",
+        "_synced",
         "last_local_mono_ns",
         "last_local_wall_ns",
         "last_exchange_ts_ms",
+        "tap",
     )
 
     def __init__(self, venue: VenueName, symbol: str) -> None:
@@ -73,10 +100,37 @@ class OrderBook:
         self.symbol = symbol
         self.bids: SortedDict = SortedDict()  # Decimal price -> Decimal size (asc)
         self.asks: SortedDict = SortedDict()
-        self.synced: bool = False
+        self._synced: bool = False
         self.last_local_mono_ns: int = 0
         self.last_local_wall_ns: int = 0
         self.last_exchange_ts_ms: int | None = None
+        self.tap: BookTap | None = None
+
+    # -- sync state ----------------------------------------------------------
+
+    @property
+    def synced(self) -> bool:
+        return self._synced
+
+    @synced.setter
+    def synced(self, value: bool) -> None:
+        if value == self._synced:
+            return
+        self._synced = value
+        # Sync transitions happen in feed control flow, not on a data frame,
+        # so they have no stamps of their own: they are journaled at the
+        # book's last data-frame stamps. Every recorded timestamp therefore
+        # originates from feed data — one time source per journal — and the
+        # replay clock is never advanced by control-flow events. (File order
+        # still records the true application order.)
+        self._emit(
+            "sync" if value else "unsync",
+            [],
+            [],
+            None,
+            self.last_local_mono_ns,
+            self.last_local_wall_ns,
+        )
 
     # -- mutation ----------------------------------------------------------
 
@@ -89,9 +143,13 @@ class OrderBook:
         mono_ns: int,
         wall_ns: int,
     ) -> None:
+        bids = list(bids)
+        asks = list(asks)
         self.bids.clear()
         self.asks.clear()
-        self.apply_deltas(bids, asks, exchange_ts_ms=exchange_ts_ms, mono_ns=mono_ns, wall_ns=wall_ns)
+        self._apply_levels(bids, asks)
+        self._stamp(exchange_ts_ms, mono_ns, wall_ns)
+        self._emit("snapshot", bids, asks, exchange_ts_ms, mono_ns, wall_ns)
 
     def apply_deltas(
         self,
@@ -102,10 +160,19 @@ class OrderBook:
         mono_ns: int,
         wall_ns: int,
     ) -> None:
+        bids = list(bids)
+        asks = list(asks)
+        self._apply_levels(bids, asks)
+        self._stamp(exchange_ts_ms, mono_ns, wall_ns)
+        self._emit("delta", bids, asks, exchange_ts_ms, mono_ns, wall_ns)
+
+    def _apply_levels(self, bids: list[RawLevel], asks: list[RawLevel]) -> None:
         for price_s, size_s in bids:
             self._set_level(self.bids, price_s, size_s)
         for price_s, size_s in asks:
             self._set_level(self.asks, price_s, size_s)
+
+    def _stamp(self, exchange_ts_ms: int | None, mono_ns: int, wall_ns: int) -> None:
         self.last_local_mono_ns = mono_ns
         self.last_local_wall_ns = wall_ns
         if exchange_ts_ms is not None:
@@ -124,7 +191,31 @@ class OrderBook:
     def clear(self) -> None:
         self.bids.clear()
         self.asks.clear()
-        self.synced = False
+        # Control-flow event: journaled at last data-frame stamps (see the
+        # synced setter for why).
+        self._emit("clear", [], [], None, self.last_local_mono_ns, self.last_local_wall_ns)
+        self.synced = False  # emits "unsync" if the book was synced
+
+    def _emit(
+        self,
+        kind: BookEventKind,
+        bids: list[RawLevel],
+        asks: list[RawLevel],
+        exchange_ts_ms: int | None,
+        mono_ns: int,
+        wall_ns: int,
+    ) -> None:
+        if self.tap is None:
+            return
+        try:
+            self.tap(self, kind, bids, asks, exchange_ts_ms, mono_ns, wall_ns)
+        except Exception:
+            # Recording must never take down market-data processing; the
+            # recorder counts its own failures, this guard is the backstop.
+            logger.exception(
+                "book tap failed",
+                extra={"venue": self.venue.value, "symbol": self.symbol, "kind": kind},
+            )
 
     # -- views -------------------------------------------------------------
 

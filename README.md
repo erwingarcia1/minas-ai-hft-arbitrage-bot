@@ -4,14 +4,20 @@ Latency-aware cross-exchange arbitrage system for **Binance (global), Bybit,
 OKX (global), and Bitget** spot markets. Python 3.11+, single-process asyncio,
 native WebSocket feeds.
 
-> **Current status: Phase 1 — market data + spread observer.**
+> **Current status: Phase 1 / Milestone 1 (CLAUDE.md §48) — market data,
+> recording, replay, and spread research. **
 > This build maintains live L2 order books, detects theoretical arbitrage
-> opportunities **net of taker fees and depth-implied slippage**, and records
-> them for research. **It contains no order-placement code whatsoever** — the
-> `arb/execution/` package is intentionally empty, no API keys are read, and
-> nothing in this build can trade. Run it for days first: the data it collects
-> answers whether real net-positive spreads exist *at your fee tier* before any
-> capital is at risk.
+> opportunities **net of taker fees, depth-implied slippage and venue
+> rounding rules**, journals every book event for **deterministic replay**,
+> and produces a **ranked viability report**. **It contains no
+> order-placement code whatsoever** — the `arb/execution/` package is
+> intentionally empty, no API keys are read, and nothing in this build can
+> trade. Run it for days first: the data it collects answers whether real
+> net-positive spreads exist *at your fee tier* before any capital is at risk.
+>
+> Governance: `CLAUDE.md` is the master engineering spec; `PROGRESS.md` is
+> the durable state/iteration log; `docs/` holds the required documentation
+> set with honest IMPLEMENTED vs SPECIFIED status headers.
 
 ## Phase plan
 
@@ -26,9 +32,19 @@ native WebSocket feeds.
 
 ```
 feeds/       native WS clients per venue -> local L2 books (Decimal-exact,
-             sequence-gap + CRC32-checksum validated, staleness-stamped)
+             sequence-gap + CRC32-checksum validated, staleness-stamped);
+             every book mutation flows through a tap seam for recording
 signals/     executable-spread detector: VWAP depth walk per clip size,
-             net of both taker fees; opportunity open/close lifecycle
+             net of both taker fees, rounded to venue step/minimum rules;
+             opportunity open/close lifecycle; injectable clock (replay)
+instruments/ canonical instrument/asset registry: per-venue tick/step/
+             minimums (static snapshot + `arb instruments fetch` refresh);
+             USDT and USDC are never treated as equivalent
+recording/   deterministic book-event journal (JSONL) — the replay input
+replay/      Mode-2 engine: re-runs detection from a journal; same events
+             + same config => byte-identical records
+report/      ranked viability report over research logs (persistence-
+             floored, transparent scoring; theoretical edge only)
 risk/        staleness monitor (>500ms or unsynced => venue unusable);
              the Phase-2 kill switch attaches at this seam
 accounting/  JSONL research log: opportunity records + periodic spread samples
@@ -61,13 +77,27 @@ recycle instead of spamming sub/unsub against venue rate limits).
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
-pytest                       # unit tests: book engine, fee math, detector
+pytest                       # unit + property tests (book engine, fee math,
+                             # detector, recording, replay, instruments, report)
 python -m arb observe        # starts the observer (public data only)
+
+# after (or during) an observation run:
+python -m arb replay --input data/recordings/books-*.jsonl   # deterministic re-run
+python -m arb report --min-duration-ms 250                   # ranked viability report
+python -m arb instruments fetch                              # refresh venue metadata
 ```
 
 - Config: `config/config.yaml`. **Set the fee tiers to your actual tiers** —
   the default is retail VIP0 and the entire point of Phase 1 is measuring edge
   net of *your* fees.
+- Instrument metadata: `config/instruments.yaml` (tick/step/minimums used to
+  round clip quantities to venue rules) ships as a **static, unverified
+  snapshot** — refresh it with `python -m arb instruments fetch` from a
+  machine with exchange access before trusting research output.
+- Recording: `data/recordings/books-<UTC>.jsonl` — deterministic book-event
+  journal (on by default; sized like the raw feeds, budget disk or disable).
+  `python -m arb replay` re-runs detection from it byte-identically, or with
+  modified thresholds/fees for sensitivity analysis (it warns which is which).
 - Prometheus metrics: `http://localhost:9109/metrics`
   (spread histograms, book age, resync counts, feed latency, reconnects).
 - Research data: `data/opportunities-YYYYMMDD.jsonl` — opportunity open/close
@@ -146,4 +176,12 @@ insufficient-depth behaviour, exact fee math, detector lifecycle (open,
 decay-close, staleness gate, unsynced gate, insufficient depth, venue-unusable,
 shutdown flush), Binance snapshot-sync algorithm (buffered overlap, duplicates,
 gap resync), Bybit sequencing (snapshot/delta chain, `u==1` restart, gap
-resubscribe), and strict config validation.
+resubscribe), strict config validation, the recording tap (every mutation and
+sync transition journaled, in order, with literal level strings), replay
+determinism (same journal + config ⇒ byte-identical records) and **live-vs-
+replay equivalence** (a feed-style-driven session reproduced exactly from its
+journal), instrument registry loading/rounding/minimums and the four venue
+metadata parsers, the viability report aggregation, and property-based tests
+(hypothesis): higher fees or worse execution can never increase net edge,
+rounding can never create quantity, an invalid book can never produce an
+evaluation.

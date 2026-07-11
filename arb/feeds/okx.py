@@ -132,8 +132,6 @@ class OkxFeed(WsFeed):
                 wall_ns=wall_ns,
             )
             self._seq[symbol] = data.seqId
-            book.synced = True
-            self.clear_resync_deadline(symbol)
         else:
             last_seq = self._seq.get(symbol)
             if last_seq is None:
@@ -152,10 +150,15 @@ class OkxFeed(WsFeed):
 
         # Deprecated by OKX on 2026-05-21: the field is now fixed to 0.
         # Verify only a non-zero checksum (older/regional gateways).
+        # Integrity is verified BEFORE the book is marked synced: state that
+        # has not passed its checksum must never be journaled as trusted.
         if data.checksum and book.checksum() != data.checksum:
             await self._resync(symbol, "checksum_mismatch")
             return
 
+        if action == "snapshot":
+            book.synced = True
+            self.clear_resync_deadline(symbol)
         if action == "update":
             # Only a clean UPDATE ends a resync streak: the snapshot right
             # after a resubscribe also applies cleanly, and counting it would

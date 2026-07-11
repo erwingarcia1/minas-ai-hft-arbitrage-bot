@@ -17,6 +17,7 @@ import pytest
 
 import arb.feeds.binance as binance_mod
 from arb.feeds.binance import BinanceFeed
+from arb.feeds.bitget import BitgetFeed
 from arb.feeds.book import BookRegistry
 from arb.feeds.bybit import BybitFeed
 from arb.feeds.okx import OkxFeed
@@ -412,5 +413,102 @@ async def test_okx_resync_storm_recycles_connection() -> None:
             ),
             wall,
             mono,
+        )
+    assert ws.closed  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# Bitget
+# ---------------------------------------------------------------------------
+
+
+def bitget_frame(action: str, bids: list, asks: list, checksum: int | None) -> bytes:
+    return orjson.dumps(
+        {
+            "action": action,
+            "arg": {"instType": "SPOT", "channel": "books", "instId": "BTCUSDT"},
+            "data": [
+                {"bids": bids, "asks": asks, "ts": "1700000000000", "checksum": checksum}
+            ],
+        }
+    )
+
+
+def make_bitget() -> tuple["BitgetFeed", BookRegistry]:
+    registry = BookRegistry([VenueName.BITGET], [BTC])
+    feed = BitgetFeed([BTC], registry, lambda v, s: None, make_metrics())
+    feed._ws = FakeWs()  # type: ignore[assignment]
+    return feed, registry
+
+
+def _crc_for(bids: list[tuple[str, str]], asks: list[tuple[str, str]]) -> int:
+    """Correct CRC32 for a book holding exactly these levels."""
+    from arb.feeds.book import OrderBook
+
+    scratch = OrderBook(VenueName.BITGET, BTC)
+    wall, mono = now_ns()
+    scratch.apply_snapshot(bids=bids, asks=asks, exchange_ts_ms=None, mono_ns=mono, wall_ns=wall)
+    return scratch.checksum()
+
+
+async def test_bitget_snapshot_then_update_with_valid_checksums() -> None:
+    feed, registry = make_bitget()
+    book = registry.get(VenueName.BITGET, BTC)
+    wall, mono = now_ns()
+
+    crc = _crc_for([("100.0", "1")], [("100.5", "1")])
+    await feed.handle_raw(bitget_frame("snapshot", [["100.0", "1"]], [["100.5", "1"]], crc), wall, mono)
+    assert book.synced
+
+    crc = _crc_for([("100.0", "4")], [("100.5", "1")])
+    await feed.handle_raw(bitget_frame("update", [["100.0", "4"]], [], crc), wall, mono)
+    assert book.best_bid() == (100.0, 4.0)
+    assert book.synced
+
+
+async def test_bitget_checksum_mismatch_resubscribes() -> None:
+    feed, registry = make_bitget()
+    book = registry.get(VenueName.BITGET, BTC)
+    wall, mono = now_ns()
+
+    crc = _crc_for([("100.0", "1")], [("100.5", "1")])
+    await feed.handle_raw(bitget_frame("snapshot", [["100.0", "1"]], [["100.5", "1"]], crc), wall, mono)
+    assert book.synced
+    # Wrong checksum on the update: book must go invisible and resubscribe.
+    await feed.handle_raw(bitget_frame("update", [["100.0", "9"]], [], 12345), wall, mono)
+    assert not book.synced
+    sent = feed._ws.sent  # type: ignore[union-attr]
+    assert any("unsubscribe" in m for m in sent)
+    assert feed.expired_resync(time.monotonic() + feed.RESYNC_DEADLINE_S + 1) == BTC
+
+
+async def test_bitget_update_before_snapshot_is_dropped() -> None:
+    feed, registry = make_bitget()
+    book = registry.get(VenueName.BITGET, BTC)
+    wall, mono = now_ns()
+    await feed.handle_raw(bitget_frame("update", [["100.0", "1"]], [], None), wall, mono)
+    assert not book.synced
+    assert book.depth() == (0, 0)
+
+
+async def test_bitget_crossed_book_resyncs() -> None:
+    feed, registry = make_bitget()
+    book = registry.get(VenueName.BITGET, BTC)
+    wall, mono = now_ns()
+    # bid >= ask: locally-crossed book means our state is corrupt.
+    crc = _crc_for([("101.0", "1")], [("100.5", "1")])
+    await feed.handle_raw(bitget_frame("snapshot", [["101.0", "1"]], [["100.5", "1"]], crc), wall, mono)
+    assert not book.synced
+    sent = feed._ws.sent  # type: ignore[union-attr]
+    assert any("unsubscribe" in m for m in sent)
+
+
+async def test_bitget_resync_storm_recycles_connection() -> None:
+    feed, _ = make_bitget()
+    wall, mono = now_ns()
+    ws = feed._ws
+    for _ in range(6):
+        await feed.handle_raw(
+            bitget_frame("snapshot", [["100.0", "1"]], [["100.5", "1"]], 1), wall, mono
         )
     assert ws.closed  # type: ignore[union-attr]
